@@ -5,10 +5,11 @@ module Main where
 import qualified Data.Map              as Map
 
 import           Data.Function         ((&))
-import           Data.List             (isInfixOf)
+import           Data.List             (isInfixOf, intersperse)
 import           Text.Pandoc.JSON
 import           Text.Read
 import           Text.Regex.PCRE.Heavy
+import           Debug.Trace
 
 type IsEscaped = Bool
 
@@ -82,24 +83,45 @@ onlySnippet attrs =
       id
 
 includeCode :: Maybe Format -> Block -> IO Block
-includeCode (Just fmt) cb@(CodeBlock (id', classes, attrs) _) = do
+includeCode _ cb@(CodeBlock (id', classes, attrs) _) = do
   let attrs' = Map.fromList attrs
   case Map.lookup "include" attrs' of
     Just f -> do
-      fileContents <- if "formatted" `Map.member` attrs'
-                        then postProcess fmt <$> readFile f
-                        else readFile f
-      let filteredLines = fileContents
+      fileContents <- readFile f
+      let filteredStr = removeSpaces $ fileContents
                           & withinLines (getRange attrs')
                           & onlySnippet attrs'
           paramNames = ["include", "formatted", "startLine", "endLine", "snippet"]
           filteredAttrs = foldl (flip Map.delete) attrs' paramNames
           classes' = unwords classes
-      case fmt of
-        (Format "html5") -> return (RawBlock (Format "html") ("<pre class=" ++ classes' ++ "><code>" ++ filteredLines ++ "</code></pre>"))
-        _               -> return (CodeBlock (id', classes, Map.toList filteredAttrs) filteredLines)
+      return $ CodeBlock (id', classes, Map.toList filteredAttrs) filteredStr
     Nothing -> return cb
 includeCode _ x = return x
 
+
+--------------------------------------------------------------------------------
+trim :: Int -> String -> String
+trim i s@(' ':xs) = if i > 0 then trim (i - 1) xs else s
+trim _ x = x
+
+removeSpaces :: String -> String
+removeSpaces str =
+  concat $ intersperse "\n" $ fmap (trim $ codeIdentation 99 ls) ls
+  where ls = lines str
+
+codeIdentation :: Int -> [String] -> Int
+codeIdentation init (a:as) = codeIdentation newInit as
+  where
+    currentIdent = lineIdentation a
+    newInit = if currentIdent < init then currentIdent else init
+codeIdentation x [] = x
+
+lineIdentation :: String -> Int
+lineIdentation []       = 99
+lineIdentation (' ':cx) = 1 + (lineIdentation cx)
+lineIdentation _        = 0
+
+
+--------------------------------------------------------------------------------
 main :: IO ()
 main = toJSONFilter includeCode
